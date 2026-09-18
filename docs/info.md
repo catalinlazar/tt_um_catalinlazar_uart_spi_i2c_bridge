@@ -1,27 +1,31 @@
 # How it works
 
-A UART command interpreter drives an I2C master (clock stretching,
-7-bit addressing) over a shared 8-bit memory-mapped register file. UART
-RX/TX are single-byte buffered, enough to absorb one byte of get-ahead
-while `cmd_interp` is mid-transaction, though not a burst. See the
-top-level `README.md` for the full opcode table, register map, and
-pinout (including the SPI-removal and area history in the "Area"
-section).
+A UART command interpreter drives an SPI master (4x chip-select,
+configurable CPOL/CPHA) and an I2C master (clock stretching, 7-bit
+addressing) over a shared 8-bit memory-mapped register file. UART
+RX/TX are FIFO-buffered so bursts of commands or data don't stall the
+host. See the top-level `README.md` for the full opcode table, register
+map, pinout, and the "Design history" section on how this ended up on
+a 1x2 tile.
 
 # How to test
 
-Hold `ui_in[2]` (loopback_test_en) high and issue an `I2C_WRITE`
-(opcode `0x10`) command over UART at 9600 baud (default): with no real
-I2C slave present, the loopback bus reliably replies with a NACK status
-byte, which exercises the START/ADDRESS/STOP sequencing end-to-end.
-Connect a real I2C peripheral (with pull-ups on `uio[0]`/`uio[1]`) and
-drop `loopback_test_en` low for full end-to-end testing.
+Hold `ui_in[2]` (loopback_test_en) high and issue an `SPI_XFER` (opcode
+`0x03`) command over UART at 9600 baud (default): the chip should echo
+back exactly the bytes you sent, since MOSI is looped to MISO
+internally. Issuing `I2C_WRITE` in the same loopback mode should
+reliably reply with a NACK status byte (no real I2C slave is present),
+which exercises the START/ADDRESS/STOP sequencing. Connect a real SPI
+or I2C peripheral (with pull-ups on `uio[0]`/`uio[1]` for I2C) and drop
+`loopback_test_en` low for full end-to-end testing.
 
 See `test/test.py` for an automated cocotb testbench covering register
-read/write, I2C NACK detection, and STATUS/RESET.
+read/write, SPI loopback, I2C NACK detection, and STATUS/RESET.
 
 # External hardware
 
+- Optional: any SPI peripheral, wired to `uo_out[1]` (SCLK),
+  `uo_out[2]` (MOSI), `ui_in[1]` (MISO), and one of `uo_out[6:3]` (CS).
 - Optional: any I2C peripheral on `uio[0]`/`uio[1]`, with external
   pull-up resistors (required — the design only drives these lines
   open-drain low).

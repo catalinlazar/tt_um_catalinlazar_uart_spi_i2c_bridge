@@ -1,20 +1,20 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-// UART <-> I2C protocol bridge for Tiny Tapeout (1x1 tile).
-// (The SPI master was dropped post-synthesis to fit the IHP 1x1 area
-// budget -- see README "Area" section for the rationale and history.)
+// UART <-> SPI/I2C protocol bridge for Tiny Tapeout (1x2 tile).
 //
 // Pin map
 // -------
 // ui_in[0]   : uart_rx
-// ui_in[1]   : reserved / unused (read as 0 internally)
-// ui_in[2]   : loopback/self-test enable (1 = internal I2C loopback)
+// ui_in[1]   : spi_miso
+// ui_in[2]   : loopback/self-test enable (1 = internal SPI+I2C loopback)
 // ui_in[7:3] : reserved / unused (read as 0 internally)
 //
 // uo_out[0]  : uart_tx
-// uo_out[6:1]: reserved / unused (driven low)
-// uo_out[7]  : heartbeat/status LED (mirrors I2C busy)
+// uo_out[1]  : spi_sclk
+// uo_out[2]  : spi_mosi
+// uo_out[6:3]: spi_cs_n[3:0]  (active low, one per device)
+// uo_out[7]  : heartbeat/status LED (mirrors STATUS busy bits)
 //
 // uio[0]     : i2c_scl  (open-drain, needs external pull-up)
 // uio[1]     : i2c_sda  (open-drain, needs external pull-up)
@@ -34,26 +34,30 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
     // Pin aliases
     // -----------------------------------------------------------------
     wire uart_rxd      = ui_in[0];
+    wire spi_miso_pad  = ui_in[1];
     wire loopback_en   = ui_in[2];
 
     wire uart_txd;
+    wire spi_sclk_w, spi_mosi_w;
+    wire [3:0] spi_cs_n_w;
     wire heartbeat;
 
     wire i2c_scl_in = uio_in[0];
     wire i2c_sda_in = uio_in[1];
     wire i2c_scl_oe, i2c_sda_oe;
 
-    assign uo_out = {heartbeat, 6'b0, uart_txd};
+    assign uo_out = {heartbeat, spi_cs_n_w, spi_mosi_w, spi_sclk_w, uart_txd};
 
     // uio: only [1:0] driven (open-drain I2C), rest are unused inputs
     assign uio_out = {6'b0, 1'b0, 1'b0}; // driving 0 whenever oe=1 (open-drain low)
     assign uio_oe  = {6'b0, i2c_sda_oe, i2c_scl_oe};
 
-    // loopback muxing for standalone self-test (no external I2C device
-    // needed): let the I2C engine see its own SDA/SCL. Models an ideal
-    // external pull-up: driving low (oe=1) reads back 0, releasing
-    // (oe=0) reads back 1 -- so an I2C_WRITE in loopback mode always
-    // sees its own address/data bytes ACKed.
+    // loopback muxing for standalone self-test (no external SPI/I2C device
+    // needed): route mosi->miso, and let the I2C engine see its own SDA.
+    // In loopback, model an ideal external pull-up: driving low (oe=1)
+    // reads back 0, releasing (oe=0) reads back 1 -- so an I2C_WRITE in
+    // loopback mode always sees its own address/data bytes ACKed.
+    wire spi_miso_sel = loopback_en ? spi_mosi_w    : spi_miso_pad;
     wire i2c_sda_read = loopback_en ? ~i2c_sda_oe   : i2c_sda_in;
     wire i2c_scl_read = loopback_en ? ~i2c_scl_oe   : i2c_scl_in;
 
@@ -164,7 +168,10 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
     wire [7:0]  reg_wr_data;
     wire [7:0]  reg_rd_data;
 
-    wire        cfg_soft_rst, cfg_i2c_en;
+    wire        cfg_soft_rst, cfg_spi_en, cfg_i2c_en;
+    wire [3:0]  cfg_spi_clkdiv;
+    wire        cfg_spi_cpol, cfg_spi_cpha;
+    wire [1:0]  cfg_spi_cs_default;
     wire [4:0]  cfg_i2c_clkdiv;
     wire        cfg_i2c_stretch_en;
 
@@ -179,10 +186,43 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
         .rd_data        (reg_rd_data),
         .status_live    (status_word),
         .soft_rst       (cfg_soft_rst),
+        .spi_en         (cfg_spi_en),
         .i2c_en         (cfg_i2c_en),
+        .spi_clkdiv     (cfg_spi_clkdiv),
+        .spi_cpol       (cfg_spi_cpol),
+        .spi_cpha       (cfg_spi_cpha),
+        .spi_cs_sel     (cfg_spi_cs_default),
         .i2c_clkdiv     (cfg_i2c_clkdiv),
         .i2c_stretch_en (cfg_i2c_stretch_en),
         .uart_baud_div  (baud_div)
+    );
+
+    // -----------------------------------------------------------------
+    // SPI master
+    // -----------------------------------------------------------------
+    wire [1:0] spi_cs_sel;
+    wire       spi_start;
+    wire [7:0] spi_tx_data;
+    wire [7:0] spi_rx_data;
+    wire       spi_busy;
+    wire       spi_done;
+
+    spi_master u_spi (
+        .clk      (clk),
+        .rst_n    (rst_n),
+        .clkdiv   (cfg_spi_clkdiv),
+        .cpol     (cfg_spi_cpol),
+        .cpha     (cfg_spi_cpha),
+        .cs_sel   (spi_cs_sel),
+        .start    (spi_start),
+        .tx_data  (spi_tx_data),
+        .rx_data  (spi_rx_data),
+        .busy     (spi_busy),
+        .done     (spi_done),
+        .sclk     (spi_sclk_w),
+        .mosi     (spi_mosi_w),
+        .miso     (spi_miso_sel),
+        .cs_n     (spi_cs_n_w)
     );
 
     // -----------------------------------------------------------------
@@ -216,9 +256,9 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
     );
 
     // -----------------------------------------------------------------
-    // Status word: [0]=rxfifo_full [1]=txfifo_empty [2]=i2c_busy
-    //              [3]=i2c_last_nack [4]=rx_frame_err [5]=i2c_en
-    //              [7:6]=reserved
+    // Status word: [0]=rxfifo_full [1]=txfifo_empty [2]=spi_busy
+    //              [3]=i2c_busy   [4]=i2c_last_nack [5]=rx_frame_err
+    //              [6]=spi_en     [7]=i2c_en
     // -----------------------------------------------------------------
     reg i2c_last_nack;
     always @(posedge clk or negedge rst_n) begin
@@ -228,10 +268,10 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
             i2c_last_nack <= i2c_ack_in;
     end
 
-    assign status_word = {2'b00, cfg_i2c_en, rx_frame_err, i2c_last_nack,
-                           i2c_busy, txfifo_empty, rxfifo_full};
+    assign status_word = {cfg_i2c_en, cfg_spi_en, rx_frame_err, i2c_last_nack,
+                           i2c_busy, spi_busy, txfifo_empty, rxfifo_full};
 
-    assign heartbeat = i2c_busy;
+    assign heartbeat = spi_busy | i2c_busy;
 
     // -----------------------------------------------------------------
     // Command interpreter (top-level glue)
@@ -254,6 +294,13 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
         .reg_rd_data   (reg_rd_data),
         .status_bits   (status_word),
 
+        .spi_cs_sel    (spi_cs_sel),
+        .spi_start     (spi_start),
+        .spi_tx_data   (spi_tx_data),
+        .spi_rx_data   (spi_rx_data),
+        .spi_busy      (spi_busy),
+        .spi_done      (spi_done),
+
         .i2c_cmd       (i2c_cmd),
         .i2c_cmd_valid (i2c_cmd_valid),
         .i2c_tx_data   (i2c_tx_data),
@@ -264,7 +311,7 @@ module tt_um_catalinlazar_uart_spi_i2c_bridge (
         .i2c_done      (i2c_done)
     );
 
-    wire _unused = &{ena, ui_in[7:3], ui_in[1], uio_in[7:2],
-                     cfg_soft_rst, cfg_i2c_stretch_en, 1'b0};
+    wire _unused = &{ena, ui_in[7:3], uio_in[7:2], cfg_spi_cs_default,
+                     cfg_i2c_stretch_en, 1'b0};
 
 endmodule
