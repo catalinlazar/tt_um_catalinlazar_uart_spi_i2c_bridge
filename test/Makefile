@@ -8,7 +8,6 @@ PROJECT_SOURCES = \
 	baud_gen.v \
 	uart_rx.v \
 	uart_tx.v \
-	spi_master.v \
 	i2c_master.v \
 	regfile.v \
 	cmd_interp.v \

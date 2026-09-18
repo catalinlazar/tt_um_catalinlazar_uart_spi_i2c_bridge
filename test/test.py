@@ -11,13 +11,14 @@ reply that begins before the send even finishes (the interpreter can
 reply within a handful of clock cycles, much faster than one more UART
 bit period).
 
-ui_in[2] (loopback_test_en) is held high for the whole test so the
-design can be fully exercised with no external SPI/I2C devices:
-  - SPI: mosi is looped back to miso internally, so SPI_XFER should echo
-    back exactly what was sent.
-  - I2C: with no real slave present, the bus floats and is modeled as
-    pulled high, so every I2C transaction's address byte should come
-    back NACKed -- this still exercises START/ADDRESS/STOP sequencing.
+ui_in[2] (loopback_test_en) is held high for the whole test so the I2C
+engine can be fully exercised with no external device: with no real
+slave present, the bus floats and is modeled as pulled high, so every
+I2C transaction's address byte should come back NACKed -- this still
+exercises START/ADDRESS/STOP sequencing.
+
+(An SPI master was part of the original design but was dropped to fit
+the IHP 1x1 tile area budget -- see README "Area" section.)
 """
 
 import asyncio
@@ -34,12 +35,8 @@ POLL_NS       = 50           # polling resolution for UART RX sampling
 LOOPBACK_BIT = 1 << 2
 
 # Opcodes
-OP_SPI_WRITE = 0x01
-OP_SPI_READ  = 0x02
-OP_SPI_XFER  = 0x03
 OP_I2C_WRITE = 0x10
 OP_I2C_READ  = 0x11
-OP_CFG_SPI   = 0x20
 OP_CFG_I2C   = 0x21
 OP_REG_WRITE = 0x30
 OP_REG_READ  = 0x31
@@ -155,25 +152,6 @@ async def test_reg_write_read(dut):
 
 
 @cocotb.test()
-async def test_spi_loopback_xfer(dut):
-    clock = Clock(dut.clk, CLK_PERIOD_NS, unit="ns")
-    cocotb.start_soon(clock.start())
-    await reset_dut(dut)
-    rxq = start_uart_tx_monitor(dut)
-
-    # CFG_SPI: clkdiv=2, mode=0 (cpol=0, cpha=0)
-    await send_cmd(dut, OP_CFG_SPI, [0x02, 0x00])
-    status = await queue_get_timeout(rxq, BIT_NS * 20)
-    assert status == STATUS_OK
-
-    data = [0x11, 0x22, 0x33]
-    await send_cmd(dut, OP_SPI_XFER, [0x00, len(data)] + data)
-    reply = await recv_bytes(rxq, 1 + len(data), BIT_NS * 50)
-    assert reply[0] == STATUS_OK, f"SPI_XFER status={reply[0]:#x}"
-    assert reply[1:] == data, f"SPI_XFER echo mismatch: got {reply[1:]}, want {data}"
-
-
-@cocotb.test()
 async def test_i2c_no_slave_nacks(dut):
     clock = Clock(dut.clk, CLK_PERIOD_NS, unit="ns")
     cocotb.start_soon(clock.start())
@@ -187,29 +165,6 @@ async def test_i2c_no_slave_nacks(dut):
     await send_cmd(dut, OP_I2C_WRITE, [0x50, 0x02, 0xAA, 0xBB])
     status = await queue_get_timeout(rxq, BIT_NS * 60)
     assert status == STATUS_NACK, f"expected NACK with no slave present, got {status:#x}"
-
-
-@cocotb.test()
-async def test_spi_write_and_read(dut):
-    clock = Clock(dut.clk, CLK_PERIOD_NS, unit="ns")
-    cocotb.start_soon(clock.start())
-    await reset_dut(dut)
-    rxq = start_uart_tx_monitor(dut)
-
-    await send_cmd(dut, OP_CFG_SPI, [0x02, 0x00])
-    assert await queue_get_timeout(rxq, BIT_NS * 20) == STATUS_OK
-
-    # SPI_WRITE: no response bytes expected beyond the status byte
-    await send_cmd(dut, OP_SPI_WRITE, [0x01, 2, 0x55, 0xAA])
-    status = await queue_get_timeout(rxq, BIT_NS * 40)
-    assert status == STATUS_OK, f"SPI_WRITE status={status:#x}"
-
-    # SPI_READ in loopback mode: master drives 0x00 dummy bytes, which
-    # loop straight back, so the read data should come back as zero.
-    await send_cmd(dut, OP_SPI_READ, [0x01, 2])
-    reply = await recv_bytes(rxq, 3, BIT_NS * 40)
-    assert reply[0] == STATUS_OK, f"SPI_READ status={reply[0]:#x}"
-    assert reply[1:] == [0x00, 0x00], f"SPI_READ data={reply[1:]}"
 
 
 @cocotb.test()
