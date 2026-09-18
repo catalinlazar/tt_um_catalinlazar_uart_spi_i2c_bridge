@@ -28,8 +28,11 @@ jobs:
           cd test
           make clean
           make
-          # make will return success even if the test fails, so check for failure in the results.xml
-          ! grep failure results.xml
+          # make will return success even if the test fails, so check for failure in the results.xml.
+          # Match the <failure ...> element specifically -- grepping for the bare
+          # word "failure" also matches the testsuite's failures="0" count attribute,
+          # which is present (and reads as a match) even when nothing failed.
+          ! grep "<failure" results.xml
 
       - name: Test Summary
         uses: test-summary/action@v2.4
@@ -43,6 +46,6 @@ jobs:
         with:
           name: test-results
           path: |
-            test/tb.fst
+            test/tb.vcd
             test/results.xml
             test/output/*
