@@ -20,7 +20,11 @@ COMPILE_ARGS += -DFUNCTIONAL
 COMPILE_ARGS += -DUSE_POWER_PINS
 COMPILE_ARGS += -DSIM
 COMPILE_ARGS += -DUNIT_DELAY=\#1
-VERILOG_SOURCES += $(PDK_ROOT)/sg13g2_stdcell/verilog/sg13g2_stdcell.v
+# ciel (the PDK version manager tt-gds-action's gl_test uses) nests the
+# stdcell library under a version-hash directory rather than directly at
+# $(PDK_ROOT)/sg13g2_stdcell/..., so locate it instead of hardcoding the path.
+STDCELL_V := $(shell find $(PDK_ROOT) -path '*/sg13g2_stdcell/verilog/sg13g2_stdcell.v' 2>/dev/null | head -1)
+VERILOG_SOURCES += $(STDCELL_V)
 VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 else
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
