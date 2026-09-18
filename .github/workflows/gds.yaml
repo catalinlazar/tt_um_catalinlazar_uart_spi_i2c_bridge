@@ -28,6 +28,14 @@ jobs:
   gl_test:
     needs: gds
     runs-on: ubuntu-24.04
+    # tt-gds-action's own gl_test script always reports failure regardless of
+    # actual test outcome (https://github.com/TinyTapeout/tt-gds-action/issues/53):
+    # its "! grep failure results.xml" check matches the harmless failures="0"
+    # JUnit attribute. Confirmed via the raw logs that the gate-level tests
+    # themselves pass (TESTS=6 PASS=6 FAIL=0 SKIP=0). Until that's fixed
+    # upstream, don't let this job's false failure block the overall workflow
+    # run (which TinyTapeout's submission platform checks the conclusion of).
+    continue-on-error: true
     steps:
       - name: checkout repo
         uses: actions/checkout@v6
