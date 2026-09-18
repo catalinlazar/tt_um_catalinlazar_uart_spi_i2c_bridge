@@ -11,3 +11,7 @@ test/sim_build
 test/__pycache__/
 test/results.xml
 test/gate_level_netlist.v
+
+# Local clone of TinyTapeout/tt-support-tools (tt_tool.py) for running the
+# hardening flow locally -- CI fetches its own copy, this isn't project source.
+tt/
